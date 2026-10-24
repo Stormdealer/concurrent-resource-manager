@@ -10,6 +10,8 @@
 #include "worker.h"
 #include "stats.h"
 #include "monitor_ipc.h"
+#include <string.h>
+#include "scheduler_compare.h"
 
 #define NUM_WORKERS      3
 #define SHM_NAME         "/crm_stats"
@@ -17,6 +19,58 @@
 
 int main(int argc, char **argv) {
     setvbuf(stdout, NULL, _IOLBF, 0); /* line-buffered even when piped/tee'd, so fork() can't duplicate buffered output */
+    
+    /* Optional standalone CPU scheduling comparison mode. */
+    if (argc >= 2 && strcmp(argv[1], "--compare") == 0) {
+        int compare_tasks = 12;
+        int rr_quantum_ms = 50;
+        SchedulerCompareJob *jobs;
+        SchedulerCompareResult results[SCHED_COMPARE_POLICY_COUNT];
+
+        if (argc >= 3) {
+            char *end = NULL;
+            long parsed = strtol(argv[2], &end, 10);
+
+            if (end == argv[2] || *end != '\0' ||
+                parsed < 1 || parsed > MAX_TASKS) {
+                fprintf(stderr,
+                        "usage: %s --compare [num_tasks: 1..%d]\n",
+                        argv[0], MAX_TASKS);
+                return 1;
+            }
+
+            compare_tasks = (int)parsed;
+        }
+
+        if (argc > 3) {
+            fprintf(stderr,
+                    "usage: %s --compare [num_tasks: 1..%d]\n",
+                    argv[0], MAX_TASKS);
+            return 1;
+        }
+
+        jobs = malloc((size_t)compare_tasks * sizeof(*jobs));
+        if (jobs == NULL) {
+            fprintf(stderr, "error: could not allocate comparison workload\n");
+            return 1;
+        }
+
+        if (!scheduler_compare_generate_workload(
+                compare_tasks, 42u, jobs) ||
+            !scheduler_compare_run(
+                jobs, compare_tasks, rr_quantum_ms, results)) {
+            fprintf(stderr, "error: scheduler comparison failed\n");
+            free(jobs);
+            return 1;
+        }
+
+        printf("Running comparison with %d tasks.\n", compare_tasks);
+        scheduler_compare_print(results, rr_quantum_ms);
+
+        free(jobs);
+        return 0;
+    }
+
     int num_tasks = (argc > 1) ? atoi(argv[1]) : 12;
     if (num_tasks < 1 || num_tasks > MAX_TASKS) {
         fprintf(stderr, "usage: %s [num_tasks: 1..%d]\n", argv[0], MAX_TASKS);
