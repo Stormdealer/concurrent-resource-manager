@@ -1,3 +1,4 @@
+
 #ifndef TASK_QUEUE_H
 #define TASK_QUEUE_H
 
@@ -22,6 +23,10 @@ void task_queue_push(TaskQueue *q, Task *t);
 /* Blocks until a task is available or the queue is shut down.
  * Returns NULL if shutting down with an empty queue. */
 Task *task_queue_pop(TaskQueue *q);
+
+/* NEW: Removes a task immediately without waiting.
+ * Returns NULL if the queue is empty. */
+Task *task_queue_try_pop(TaskQueue *q);
 
 int  task_queue_size(TaskQueue *q);
 void task_queue_shutdown(TaskQueue *q);

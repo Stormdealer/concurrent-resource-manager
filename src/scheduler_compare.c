@@ -1,3 +1,4 @@
+
 #include "scheduler_compare.h"
 
 #include <stdio.h>
@@ -155,6 +156,7 @@ static int run_one_policy(const SchedulerCompareJob *jobs,
     if (state == NULL) {
         return 0;
     }
+
     for (i = 0; i < task_count; i++) {
         state[i].id = jobs[i].id;
         state[i].arrival_ms = jobs[i].arrival_ms;
@@ -163,6 +165,7 @@ static int run_one_policy(const SchedulerCompareJob *jobs,
         state[i].completion_ms = 0;
         state[i].queue_level = 0;
     }
+
     for (i = 0; i < queue_count; i++) {
         if (!queue_init(&queues[i], task_count + 1)) {
             goto cleanup;
@@ -171,10 +174,11 @@ static int run_one_policy(const SchedulerCompareJob *jobs,
 
     while (completed < task_count) {
         int chosen = -1;
-        int level;
+        int level = 0;
 
         /* New arrivals enter the highest ready level. */
-        while (next_arrival < task_count && state[next_arrival].arrival_ms <= now) {
+        while (next_arrival < task_count &&
+               state[next_arrival].arrival_ms <= now) {
             if (!queue_push(&queues[0], next_arrival)) {
                 goto cleanup;
             }
@@ -204,6 +208,7 @@ static int run_one_policy(const SchedulerCompareJob *jobs,
         {
             int slice;
             int ran;
+
             if (policy == SCHED_COMPARE_FCFS) {
                 slice = state[chosen].remaining_ms; /* non-preemptive */
             } else if (policy == SCHED_COMPARE_ROUND_ROBIN) {
@@ -214,12 +219,14 @@ static int run_one_policy(const SchedulerCompareJob *jobs,
 
             ran = (state[chosen].remaining_ms < slice)
                       ? state[chosen].remaining_ms : slice;
+
             now += ran;
             state[chosen].remaining_ms -= ran;
 
             /* Arrivals during a time slice join the ready queue before the
              * unfinished running job is requeued, as in normal RR/MLFQ. */
-            while (next_arrival < task_count && state[next_arrival].arrival_ms <= now) {
+            while (next_arrival < task_count &&
+                   state[next_arrival].arrival_ms <= now) {
                 if (!queue_push(&queues[0], next_arrival)) {
                     goto cleanup;
                 }
@@ -229,22 +236,33 @@ static int run_one_policy(const SchedulerCompareJob *jobs,
             if (state[chosen].remaining_ms == 0) {
                 long turnaround;
                 long waiting;
+
                 state[chosen].completion_ms = now;
                 turnaround = (long)now - state[chosen].arrival_ms;
                 waiting = turnaround - state[chosen].burst_ms;
+
                 if (waiting < 0) {
                     waiting = 0;
                 }
+
                 total_waiting += waiting;
                 total_turnaround += turnaround;
                 completed++;
             } else {
-                if (policy == SCHED_COMPARE_MLFQ && level < MLFQ_LEVELS - 1) {
-                    state[chosen].queue_level = level + 1;
-                    if (!queue_push(&queues[level + 1], chosen)) {
+                if (policy == SCHED_COMPARE_MLFQ) {
+                    /* Demote a task until the lowest level, then keep it there. */
+                    if (level < MLFQ_LEVELS - 1) {
+                        state[chosen].queue_level = level + 1;
+                    } else {
+                        state[chosen].queue_level = level;
+                    }
+
+                    if (!queue_push(
+                            &queues[state[chosen].queue_level], chosen)) {
                         goto cleanup;
                     }
                 } else {
+                    /* FCFS and Round Robin use the single ready queue. */
                     if (!queue_push(&queues[0], chosen)) {
                         goto cleanup;
                     }
@@ -253,15 +271,19 @@ static int run_one_policy(const SchedulerCompareJob *jobs,
         }
     }
 
-    result->average_waiting_ms = (double)total_waiting / (double)task_count;
-    result->average_turnaround_ms = (double)total_turnaround / (double)task_count;
+    result->average_waiting_ms =
+        (double)total_waiting / (double)task_count;
+    result->average_turnaround_ms =
+        (double)total_turnaround / (double)task_count;
     result->total_elapsed_ms = now;
+
     ok = 1;
 
 cleanup:
     for (i = 0; i < queue_count; i++) {
         queue_destroy(&queues[i]);
     }
+
     free(state);
     return ok;
 }
@@ -272,21 +294,29 @@ int scheduler_compare_run(const SchedulerCompareJob *jobs,
                           SchedulerCompareResult results[SCHED_COMPARE_POLICY_COUNT])
 {
     int policy;
-    if (!validate_jobs(jobs, task_count) || results == NULL || rr_quantum_ms <= 0) {
+
+    if (!validate_jobs(jobs, task_count) ||
+        results == NULL ||
+        rr_quantum_ms <= 0) {
         return 0;
     }
 
     for (policy = 0; policy < SCHED_COMPARE_POLICY_COUNT; policy++) {
-        if (!run_one_policy(jobs, task_count, (SchedulerComparePolicy)policy,
-                            rr_quantum_ms, &results[policy])) {
+        if (!run_one_policy(jobs,
+                            task_count,
+                            (SchedulerComparePolicy)policy,
+                            rr_quantum_ms,
+                            &results[policy])) {
             return 0;
         }
     }
+
     return 1;
 }
 
-void scheduler_compare_print(const SchedulerCompareResult results[SCHED_COMPARE_POLICY_COUNT],
-                             int rr_quantum_ms)
+void scheduler_compare_print(
+    const SchedulerCompareResult results[SCHED_COMPARE_POLICY_COUNT],
+    int rr_quantum_ms)
 {
     if (results == NULL || rr_quantum_ms <= 0) {
         return;
@@ -294,19 +324,23 @@ void scheduler_compare_print(const SchedulerCompareResult results[SCHED_COMPARE_
 
     printf("\n===== CPU scheduling comparison (single CPU; resources excluded) =====\n");
     printf("Policy              Avg waiting (ms)   Avg turnaround (ms)   Elapsed (ms)\n");
+
     printf("FCFS                %16.2f   %20.2f   %12d\n",
            results[SCHED_COMPARE_FCFS].average_waiting_ms,
            results[SCHED_COMPARE_FCFS].average_turnaround_ms,
            results[SCHED_COMPARE_FCFS].total_elapsed_ms);
+
     printf("Round Robin (q=%d)  %16.2f   %20.2f   %12d\n",
            rr_quantum_ms,
            results[SCHED_COMPARE_ROUND_ROBIN].average_waiting_ms,
            results[SCHED_COMPARE_ROUND_ROBIN].average_turnaround_ms,
            results[SCHED_COMPARE_ROUND_ROBIN].total_elapsed_ms);
+
     printf("MLFQ (20/50/100)     %16.2f   %20.2f   %12d\n",
            results[SCHED_COMPARE_MLFQ].average_waiting_ms,
            results[SCHED_COMPARE_MLFQ].average_turnaround_ms,
            results[SCHED_COMPARE_MLFQ].total_elapsed_ms);
+
     printf("Note: this isolates CPU scheduling; it does not include the project's\n");
     printf("three-worker concurrency or Banker's Algorithm resource contention.\n");
 }
